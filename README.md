@@ -2,13 +2,15 @@
 
 Pick and run `package.json` scripts from your terminal. Monorepo-aware.
 
+![pks demo](demo/demo.gif)
+
 ```
 $ pks
 > run script
-  @acme/web   dev      next dev
-  @acme/web   build    next build
+  @example/web   dev      next dev
+  @example/web   build    next build
   workspace   lint     turbo run lint
-  @acme/ui    build    tsup
+  @example/ui    build    tsup
 ```
 
 Type to filter, press enter to run. The package manager (pnpm, yarn, bun or
@@ -62,8 +64,8 @@ Inside a workspace, scripts are grouped in sections:
 3. every other workspace package
 
 A script always runs from the directory of the package it belongs to, so picking
-a `workspace` script runs it from the repo root and picking `@acme/ui build`
-runs it in `@acme/ui`.
+a `workspace` script runs it from the repo root and picking `@example/ui build`
+runs it in `@example/ui`.
 
 A workspace root is a parent directory with a `pnpm-workspace.yaml`, or a
 `package.json` with a `workspaces` field. Packages are found through its globs
@@ -72,6 +74,8 @@ nearest `package.json` is used.
 
 `pks <script>` runs the first exact match in the order above. If several
 packages share a script name, run `pks` and filter to choose.
+
+Try it on the [example monorepo](examples/monorepo).
 
 ## Development
 

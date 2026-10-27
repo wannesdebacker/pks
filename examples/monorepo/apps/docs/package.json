@@ -1,0 +1,8 @@
+{
+  "name": "@example/docs",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"starting docs dev server (cwd: ${PWD##*/})\"",
+    "build": "echo \"building docs (cwd: ${PWD##*/})\""
+  }
+}

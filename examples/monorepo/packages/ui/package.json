@@ -1,0 +1,9 @@
+{
+  "name": "@example/ui",
+  "private": true,
+  "scripts": {
+    "build": "echo \"building ui (cwd: ${PWD##*/})\"",
+    "storybook": "echo \"starting storybook (cwd: ${PWD##*/})\"",
+    "test": "echo \"testing ui (cwd: ${PWD##*/})\""
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "example",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "echo \"building every package (cwd: ${PWD##*/})\"",
+    "lint": "echo \"linting the whole repo (cwd: ${PWD##*/})\"",
+    "test": "echo \"testing the whole repo (cwd: ${PWD##*/})\""
+  }
+}

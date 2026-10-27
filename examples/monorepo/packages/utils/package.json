@@ -1,0 +1,8 @@
+{
+  "name": "@example/utils",
+  "private": true,
+  "scripts": {
+    "build": "echo \"building utils (cwd: ${PWD##*/})\"",
+    "test": "echo \"testing utils (cwd: ${PWD##*/})\""
+  }
+}
