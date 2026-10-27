@@ -1,0 +1,21 @@
+[package]
+name = "pks"
+version = "0.1.0"
+edition = "2021"
+description = "Pick and run package.json scripts, monorepo-aware"
+keywords = ["npm", "pnpm", "monorepo", "scripts", "cli"]
+categories = ["command-line-utilities"]
+license = "MIT"
+repository = "https://github.com/wannesdebacker/pks"
+homepage = "https://github.com/wannesdebacker/pks"
+readme = "README.md"
+authors = ["Wannes De Backer"]
+
+[dependencies]
+inquire = "0.7"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
