@@ -14,10 +14,12 @@ USAGE:
     pks [OPTIONS]                    pick a script interactively
     pks [OPTIONS] <script> [ARGS]    run a script; if no exact match, open the picker pre-filtered
     pks [OPTIONS] -- [ARGS]          pick interactively, forward ARGS to the script
+    pks init <zsh|bash|fish>         print shell integration (adds runs to shell history)
 
 OPTIONS:
     -l, --list       print scripts and their commands, then exit
     -n, --dry-run    print the command instead of running it
+    -e, --emit       print a shell-ready command line (used by `pks init`)
     -w, --where      print the path(s) of the package.json in use, then exit
     -h, --help       show this help
     -V, --version    show version
@@ -36,6 +38,7 @@ The package manager (pnpm, yarn, bun, npm) is detected from the lockfile.";
 struct Opts {
     list: bool,
     dry_run: bool,
+    emit: bool,
     show_path: bool,
     script: Option<String>,
     extra: Vec<String>,
@@ -64,6 +67,7 @@ fn parse_args() -> Opts {
             }
             "-l" | "--list" => opts.list = true,
             "-n" | "--dry-run" => opts.dry_run = true,
+            "-e" | "--emit" => opts.emit = true,
             "-w" | "--where" => opts.show_path = true,
             "--" => {
                 opts.extra = args.collect();
@@ -335,7 +339,72 @@ fn run(mut cmd: Command, pm: &str) -> ! {
     }
 }
 
+const INIT_ZSH: &str = r#"pks() {
+  case "$1" in
+    -*) [[ "$1" == "--" ]] || { command pks "$@"; return; } ;;
+    init) command pks "$@"; return ;;
+  esac
+  local cmd
+  cmd="$(command pks --emit "$@")" || return $?
+  [[ -z "$cmd" ]] && return 0
+  print -s -- "$cmd"
+  eval "( $cmd )"
+}
+"#;
+
+const INIT_BASH: &str = r#"pks() {
+  case "$1" in
+    --) ;;
+    -*|init) command pks "$@"; return ;;
+  esac
+  local cmd
+  cmd="$(command pks --emit "$@")" || return $?
+  [ -z "$cmd" ] && return 0
+  history -s -- "$cmd"
+  eval "( $cmd )"
+}
+"#;
+
+const INIT_FISH: &str = r#"function pks
+    switch "$argv[1]"
+        case --
+        case '-*' init
+            command pks $argv
+            return
+    end
+    set -l cmd (command pks --emit $argv | string collect)
+    or return $status
+    test -z "$cmd"; and return 0
+    history append -- $cmd
+    eval "begin; $cmd; end"
+end
+"#;
+
+fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@=+,%".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
 fn main() {
+    if env::args().nth(1).as_deref() == Some("init") {
+        match env::args().nth(2).as_deref() {
+            Some("zsh") => print!("{INIT_ZSH}"),
+            Some("bash") => print!("{INIT_BASH}"),
+            Some("fish") => print!("{INIT_FISH}"),
+            _ => {
+                eprintln!("usage: pks init <zsh|bash|fish>");
+                exit(2);
+            }
+        }
+        return;
+    }
+
     let opts = parse_args();
 
     let cwd = env::current_dir().unwrap_or_else(|e| {
@@ -436,6 +505,21 @@ fn main() {
     if opts.dry_run {
         println!("{pm} run {} {}", script.name, opts.extra.join(" "));
         eprintln!("  (in {})", script.dir.display());
+        return;
+    }
+
+    if opts.emit {
+        let mut parts = vec![shell_quote(pm), "run".into(), shell_quote(&script.name)];
+        parts.extend(opts.extra.iter().map(|a| shell_quote(a)));
+        let line = parts.join(" ");
+        if script.dir == cwd {
+            println!("{line}");
+        } else {
+            println!(
+                "cd {} && {line}",
+                shell_quote(&script.dir.to_string_lossy())
+            );
+        }
         return;
     }
 

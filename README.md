@@ -55,6 +55,21 @@ pks -n <script>         print the command instead of running it
 pks -w                  print the package.json path(s) in use
 ```
 
+### Shell history
+
+A program can't add to its parent shell's history, so after `pks` the up arrow
+won't show what ran. Add this to your `~/.zshrc` (or `~/.bashrc`, or
+`~/.config/fish/config.fish` with `pks init fish | source`) to fix that:
+
+```sh
+eval "$(pks init zsh)"   # or: pks init bash
+```
+
+`pks` then becomes a small shell function that records the resolved command
+(e.g. `cd /repo/packages/ui && pnpm run build`) in your history and runs it in a
+subshell, so your working directory is untouched. Flags like `-l` and `-n` pass
+straight through.
+
 ### Monorepos
 
 Inside a workspace, scripts are grouped in sections:
