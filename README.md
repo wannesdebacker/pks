@@ -78,6 +78,9 @@ Inside a workspace, scripts are grouped in sections:
 2. the workspace root
 3. every other workspace package
 
+When you run `pks` at the workspace root itself, the root's scripts appear under
+the `workspace` section, followed by every package.
+
 A script always runs from the directory of the package it belongs to, so picking
 a `workspace` script runs it from the repo root and picking `@example/ui build`
 runs it in `@example/ui`.

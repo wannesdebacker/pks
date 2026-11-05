@@ -25,8 +25,9 @@ OPTIONS:
     -V, --version    show version
 
 In a monorepo, scripts are listed in sections: the nearest package.json
-first, then the workspace root, then every other workspace package. Each
-script runs from the directory of the package it belongs to.
+first, then the workspace root, then every other workspace package. Run at
+the workspace root itself, its scripts appear under the \"workspace\"
+section. Each script runs from the directory of the package it belongs to.
 
 A workspace root is a parent directory with a pnpm-workspace.yaml or a
 package.json containing a \"workspaces\" field. Packages are found through
@@ -52,8 +53,12 @@ struct Script {
 }
 
 fn parse_args() -> Opts {
+    parse(env::args().skip(1))
+}
+
+fn parse<I: IntoIterator<Item = String>>(argv: I) -> Opts {
     let mut opts = Opts::default();
-    let mut args = env::args().skip(1);
+    let mut args = argv.into_iter();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -80,6 +85,10 @@ fn parse_args() -> Opts {
             _ => {
                 opts.script = Some(arg);
                 opts.extra = args.collect();
+                // `pks <script> -- args` should not forward the literal `--`.
+                if opts.extra.first().map(String::as_str) == Some("--") {
+                    opts.extra.remove(0);
+                }
                 break;
             }
         }
@@ -107,20 +116,25 @@ fn read_package(path: &Path) -> Value {
     })
 }
 
+fn try_read_package(path: &Path) -> Option<Value> {
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 fn is_workspace_root(dir: &Path) -> bool {
     if dir.join("pnpm-workspace.yaml").is_file() {
         return true;
     }
 
     let manifest = dir.join("package.json");
-    manifest.is_file() && read_package(&manifest).get("workspaces").is_some()
+    manifest.is_file()
+        && try_read_package(&manifest).is_some_and(|json| json.get("workspaces").is_some())
 }
 
-/// Nearest ancestor above `package_dir` that declares a workspace.
+/// Nearest ancestor of `package_dir`, including itself, that declares a workspace.
 fn find_workspace_root(package_dir: &Path) -> Option<PathBuf> {
     package_dir
         .ancestors()
-        .skip(1)
         .find(|dir| is_workspace_root(dir))
         .map(Path::to_path_buf)
 }
@@ -304,6 +318,68 @@ fn workspace_packages(root: &Path) -> Vec<PathBuf> {
     included
 }
 
+fn package_title(json: &Value, fallback: &str) -> String {
+    json.get("name")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// All runnable scripts: the nearest package first, then the workspace root,
+/// then every other workspace package. If the nearest package.json is itself
+/// the workspace root, its scripts appear once, under the `workspace` section.
+fn gather_scripts(local_path: &Path, root_dir: Option<&Path>) -> Vec<Script> {
+    let local_dir = local_path.parent().unwrap();
+    let local_json = read_package(local_path);
+    let mut scripts = Vec::new();
+
+    if root_dir == Some(local_dir) {
+        scripts.extend(scripts_of(&local_json, local_dir, "workspace"));
+    } else {
+        let local_title = package_title(
+            &local_json,
+            &local_dir
+                .file_name()
+                .map_or("local".into(), |n| n.to_string_lossy().into_owned()),
+        );
+        scripts.extend(scripts_of(&local_json, local_dir, &local_title));
+        if let Some(root) = root_dir {
+            let root_path = root.join("package.json");
+            if root_path.is_file() {
+                scripts.extend(scripts_of(&read_package(&root_path), root, "workspace"));
+            }
+        }
+    }
+
+    if let Some(root) = root_dir {
+        for dir in workspace_packages(root)
+            .iter()
+            .filter(|dir| dir.as_path() != local_dir)
+        {
+            let json = read_package(&dir.join("package.json"));
+            let title = package_title(
+                &json,
+                &dir.strip_prefix(root).unwrap_or(dir).display().to_string(),
+            );
+            scripts.extend(scripts_of(&json, dir, &title));
+        }
+    }
+
+    scripts
+}
+
+/// Arguments for `<pm> run <script>`. npm only forwards extra arguments to the
+/// script when they come after a `--` separator; pnpm, bun and yarn take them
+/// directly.
+fn run_args(pm: &str, script: &str, extra: &[String]) -> Vec<String> {
+    let mut args = vec!["run".to_string(), script.to_string()];
+    if !extra.is_empty() && pm == "npm" {
+        args.push("--".to_string());
+    }
+    args.extend(extra.iter().cloned());
+    args
+}
+
 fn build_command(pm: &str, script: &Script, extra: &[String]) -> Command {
     let mut cmd = if cfg!(windows) {
         let mut cmd = Command::new("cmd");
@@ -313,8 +389,7 @@ fn build_command(pm: &str, script: &Script, extra: &[String]) -> Command {
         Command::new(pm)
     };
 
-    cmd.args(["run", &script.name])
-        .args(extra)
+    cmd.args(run_args(pm, &script.name, extra))
         .current_dir(&script.dir);
     cmd
 }
@@ -426,43 +501,14 @@ fn main() {
     if opts.show_path {
         println!("{}", local_path.display());
         if let Some(root) = &root_path {
-            println!("{}", root.display());
+            if root != &local_path {
+                println!("{}", root.display());
+            }
         }
         return;
     }
 
-    let local_json = read_package(&local_path);
-    let local_title = local_json
-        .get("name")
-        .and_then(Value::as_str)
-        .map(String::from)
-        .unwrap_or_else(|| {
-            local_dir
-                .file_name()
-                .map_or("local".into(), |n| n.to_string_lossy().into_owned())
-        });
-    let mut scripts = scripts_of(&local_json, local_dir, &local_title);
-    if let Some(root) = &root_path {
-        scripts.extend(scripts_of(
-            &read_package(root),
-            root.parent().unwrap(),
-            "workspace",
-        ));
-    }
-    if let Some(root) = &root_dir {
-        for dir in workspace_packages(root)
-            .iter()
-            .filter(|dir| dir.as_path() != local_dir)
-        {
-            let json = read_package(&dir.join("package.json"));
-            let title = json
-                .get("name")
-                .and_then(Value::as_str)
-                .map(String::from)
-                .unwrap_or_else(|| dir.strip_prefix(root).unwrap_or(dir).display().to_string());
-            scripts.extend(scripts_of(&json, dir, &title));
-        }
-    }
+    let scripts = gather_scripts(&local_path, root_dir.as_deref());
 
     if scripts.is_empty() {
         eprintln!("no scripts in package.json");
@@ -503,7 +549,11 @@ fn main() {
     let pm = package_manager(&script.dir);
 
     if opts.dry_run {
-        println!("{pm} run {} {}", script.name, opts.extra.join(" "));
+        println!(
+            "{} {}",
+            pm,
+            run_args(pm, &script.name, &opts.extra).join(" ")
+        );
         eprintln!("  (in {})", script.dir.display());
         return;
     }
@@ -602,6 +652,165 @@ mod tests {
         write(&root.join("package.json"), r#"{"scripts":{"a":"b"}}"#);
 
         assert_eq!(find_workspace_root(&root), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_can_be_the_local_package_itself() {
+        let root = fixture("self-root");
+        write(
+            &root.join("package.json"),
+            r#"{"name":"root","workspaces":["apps/*"],"scripts":{"build":"echo root"}}"#,
+        );
+        write(
+            &root.join("apps/web/package.json"),
+            r#"{"name":"@x/web","scripts":{"dev":"echo dev"}}"#,
+        );
+
+        assert_eq!(find_workspace_root(&root), Some(root.clone()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_package_json_in_ancestor_is_skipped() {
+        let root = fixture("badjson");
+        write(&root.join("package.json"), "{ not json");
+        write(&root.join("pkg/package.json"), r#"{"scripts":{"a":"b"}}"#);
+
+        assert!(!is_workspace_root(&root));
+        assert_eq!(find_workspace_root(&root.join("pkg")), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_found_above_invalid_package_json() {
+        let root = fixture("badjson2");
+        write(&root.join("package.json"), r#"{"workspaces":["pkg/*"]}"#);
+        write(&root.join("bad/package.json"), "{ nope");
+        write(&root.join("pkg/a/package.json"), "{}");
+
+        assert_eq!(find_workspace_root(&root.join("pkg/a")), Some(root.clone()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scripts_at_workspace_root_are_listed_once_with_all_packages() {
+        let root = fixture("root-scripts");
+        write(
+            &root.join("package.json"),
+            r#"{"name":"root","workspaces":["apps/*"],"scripts":{"build":"echo root","lint":"echo lint"}}"#,
+        );
+        write(
+            &root.join("apps/web/package.json"),
+            r#"{"name":"@x/web","scripts":{"dev":"echo dev"}}"#,
+        );
+
+        let scripts = gather_scripts(&root.join("package.json"), Some(&root));
+
+        let root_scripts: Vec<&Script> = scripts
+            .iter()
+            .filter(|s| s.section == "workspace")
+            .collect();
+        assert_eq!(root_scripts.len(), 2);
+        assert!(root_scripts.iter().all(|s| s.dir == root));
+        assert!(scripts
+            .iter()
+            .any(|s| s.section == "@x/web" && s.name == "dev"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scripts_from_subpackage_list_local_first_then_root_then_others() {
+        let root = fixture("sub-scripts");
+        write(
+            &root.join("package.json"),
+            r#"{"name":"root","workspaces":["apps/*"],"scripts":{"build":"echo root"}}"#,
+        );
+        write(
+            &root.join("apps/web/package.json"),
+            r#"{"name":"@x/web","scripts":{"build":"echo web","dev":"echo dev"}}"#,
+        );
+        write(
+            &root.join("apps/docs/package.json"),
+            r#"{"name":"@x/docs","scripts":{"build":"echo docs"}}"#,
+        );
+
+        let scripts = gather_scripts(&root.join("apps/web/package.json"), Some(&root));
+
+        let sections: Vec<&str> = scripts.iter().map(|s| s.section.as_str()).collect();
+        assert_eq!(sections, vec!["@x/web", "@x/web", "workspace", "@x/docs"]);
+        // exact-name lookup resolves to the local package's script
+        let pos = scripts.iter().position(|s| s.name == "build").unwrap();
+        assert_eq!(scripts[pos].section, "@x/web");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn npm_gets_double_dash_before_extra_args() {
+        let extra = vec!["--watch".to_string()];
+        assert_eq!(
+            run_args("npm", "test", &extra),
+            vec!["run", "test", "--", "--watch"]
+        );
+        assert_eq!(
+            run_args("pnpm", "test", &extra),
+            vec!["run", "test", "--watch"]
+        );
+        assert_eq!(
+            run_args("bun", "test", &extra),
+            vec!["run", "test", "--watch"]
+        );
+        assert_eq!(run_args("npm", "test", &[]), vec!["run", "test"]);
+    }
+
+    #[test]
+    fn parse_strips_literal_double_dash_after_script_name() {
+        let opts = parse(vec!["echo".to_string(), "--".to_string(), "hi".to_string()]);
+        assert_eq!(opts.script.as_deref(), Some("echo"));
+        assert_eq!(opts.extra, vec!["hi".to_string()]);
+
+        let opts = parse(vec!["--".to_string(), "hi".to_string()]);
+        assert_eq!(opts.script, None);
+        assert_eq!(opts.extra, vec!["hi".to_string()]);
+
+        let opts = parse(vec!["-n".to_string(), "build".to_string()]);
+        assert!(opts.dry_run);
+        assert_eq!(opts.script.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn shell_quote_leaves_safe_strings_alone() {
+        assert_eq!(shell_quote("pnpm"), "pnpm");
+        assert_eq!(shell_quote("@scope/pkg:build"), "@scope/pkg:build");
+        assert_eq!(shell_quote("a/b-c_d.e"), "a/b-c_d.e");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_escapes_dangerous_strings() {
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn detects_package_manager_from_lockfile_in_ancestor() {
+        let root = fixture("pm");
+        write(&root.join("pnpm-lock.yaml"), "");
+        write(&root.join("yarn.lock"), "");
+        write(&root.join("packages/a/package.json"), "{}");
+
+        // pnpm wins when several lockfiles are present
+        assert_eq!(package_manager(&root.join("packages/a")), "pnpm");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_manager_defaults_to_npm_without_lockfile() {
+        let root = fixture("pm-default");
+        write(&root.join("package.json"), "{}");
+
+        assert_eq!(package_manager(&root), "npm");
         fs::remove_dir_all(root).unwrap();
     }
 }
