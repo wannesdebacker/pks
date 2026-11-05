@@ -29,7 +29,7 @@ This puts `pks` in `~/.local/bin`. Make sure that directory is on your `PATH`
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/wannesdebacker/pks/main/install.sh \
-  | PKS_INSTALL_DIR=/usr/local/bin PKS_VERSION=v0.2.0 sh
+  | PKS_INSTALL_DIR=/usr/local/bin PKS_VERSION=v0.3.0 sh
 ```
 
 ### Windows
@@ -109,8 +109,8 @@ cargo fmt && cargo clippy --all-targets -- -D warnings
 2. Tag and push:
 
    ```sh
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 
 The release workflow builds binaries for macOS (arm64, x64), Linux (arm64, x64)
